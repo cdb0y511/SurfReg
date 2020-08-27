@@ -13,7 +13,7 @@ pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr mCloud (new pcl::PointCloud<pcl::Po
 ThreadMutexObject<bool> done(false);
 ThreadMutexObject<int> count(0);
 ThreadMutexObject<int> iteration(0);
-
+double distance = 0.01;
 float getScore(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr input)
 {
     pcl::search::KdTree<pcl::PointXYZRGBNormal>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZRGBNormal>);
@@ -36,11 +36,72 @@ float getScore(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr input)
     return totalSum / (double)input->size();
 }
 
+float getCompletenessScore(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr input,pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr aligend)
+{
+    pcl::search::KdTree<pcl::PointXYZRGBNormal>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZRGBNormal>);
+    if(aligend == nullptr)
+        tree->setInputCloud(rCloud);
+    else
+        tree->setInputCloud(aligend);
+
+    std::vector<int> pointIdxNKNSearch(1);
+    std::vector<float> pointNKNSquaredDistance(1);
+
+    int totalSum = 0;
+
+    count.assignValue(0);
+
+    for(size_t i = 0; i < input->size(); i++)
+    {
+        tree->nearestKSearch(input->at(i), 1, pointIdxNKNSearch, pointNKNSquaredDistance);
+        if(sqrt(pointNKNSquaredDistance.at(0))<distance)
+            totalSum ++;
+        count++;
+    }
+
+    return totalSum / (double)input->size();
+}
+
+float getAccuracyScore(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr input)
+{
+    pcl::search::KdTree<pcl::PointXYZRGBNormal>::Ptr tree (new pcl::search::KdTree<pcl::PointXYZRGBNormal>);
+    tree->setInputCloud(mCloud);
+
+    std::vector<int> pointIdxNKNSearch(1);
+    std::vector<float> pointNKNSquaredDistance(1);
+
+    double totalSum = 0;
+
+    count.assignValue(0);
+
+    for(size_t i = 0; i < input->size(); i++)
+    {
+        tree->nearestKSearch(input->at(i), 1, pointIdxNKNSearch, pointNKNSquaredDistance);
+        if(sqrt(pointNKNSquaredDistance.at(0))<distance)
+            totalSum ++;
+        count++;
+    }
+
+    return totalSum / (double)input->size();
+}
+
 void computeAlignment()
 {
-    float value = getScore(rCloud);
+    //float value = getScore(rCloud);
 
-    if(value < 0.05)
+    float Completeness = getCompletenessScore(mCloud, nullptr);
+
+    float Accuracy = getAccuracyScore(rCloud);
+
+    float F1 = 2*(Completeness*Accuracy)/(Completeness+Accuracy);
+
+    cout<<"Completeness ="<<Completeness<<endl;
+
+    cout<<"Accuracy ="<<Accuracy<<endl;
+
+    cout<<"F1 ="<<F1<<endl;
+
+/*    if(value < 0.05)
     {
         pcl::IterativeClosestPoint<pcl::PointXYZRGBNormal, pcl::PointXYZRGBNormal> icp;
 
@@ -59,7 +120,37 @@ void computeAlignment()
         value = std::min(getScore(aligned), value);
     }
 
-    std::cout << value << std::endl;
+    std::cout << value << std::endl;*/
+
+    if(F1 > 0.2)
+    {
+        pcl::IterativeClosestPoint<pcl::PointXYZRGBNormal, pcl::PointXYZRGBNormal> icp;
+
+        pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr aligned (new pcl::PointCloud <pcl::PointXYZRGBNormal>);
+
+        icp.setInputSource(rCloud);
+        icp.setInputTarget(mCloud);
+        icp.setMaximumIterations(1);
+
+        for(int i = 0; i < 10; i++)
+        {
+            icp.align(*aligned, icp.getFinalTransformation());
+            iteration++;
+        }
+
+        Completeness = std::max(getCompletenessScore(mCloud,aligned), Completeness);
+        Accuracy = std::max(getAccuracyScore(rCloud), Accuracy);
+
+    }
+
+    F1 = 2*(Completeness*Accuracy)/(Completeness+Accuracy);
+
+    cout<<"Completeness2 ="<<Completeness<<endl;
+
+    cout<<"Accuracy2 ="<<Accuracy<<endl;
+
+    cout<<"F12 ="<<F1<<endl;
+
 
     done.assignValue(true);
 }
@@ -70,6 +161,8 @@ int main(int argc, char ** argv)
 
     std::string reconstructionFile;
     pcl::console::parse_argument(argc, argv, "-r", reconstructionFile);
+
+    pcl::console::parse_argument(argc, argv, "-d", distance);
 
     std::string modelFile;
     pcl::console::parse_argument(argc, argv, "-m", modelFile);
@@ -197,7 +290,7 @@ int main(int argc, char ** argv)
         {
             std::stringstream strs;
 
-            strs << "Scoring... " << countVal << "/" << rCloud->size();
+            strs << "Scoring... " << countVal << "/" << rCloud->size()+mCloud->size();
 
             cloudViewer.addText(strs.str(), 20, 20, 50, 1, 0, 0, "text");
         }
